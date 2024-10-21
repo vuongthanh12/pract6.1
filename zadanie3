@@ -1,0 +1,250 @@
+#define _CRT_SECURE_NO_WARNINGS
+#include <iostream>
+#include <string>
+#include <vector>
+#include <list>
+#include <fstream>
+#include <cstdio>
+#include <chrono>
+#include <cstring>
+
+using namespace std;
+
+// Структура для хранения информации о пациенте
+struct Patient {
+    char cardNumber[50];     // Ключ - номер карточки пациента
+    char diseaseCode[100];   // Код хронического заболевания
+    char doctorLastName[100];// Фамилия лечащего врача
+    bool isDeleted;          // Поле для логического удаления
+};
+
+// Структура элемента таблицы
+struct HashTableElement {
+    string key;       // Ключ
+    int recordNumber; // Номер записи в файле
+};
+
+// Хеш-таблица с цепочками
+class HashTable {
+private:
+    vector<list<HashTableElement>> table;
+    int tableSize;
+    int numElements;
+
+    // Хеш-функция
+    int hashFunction(const string& key) const {
+        unsigned int hash = 0;
+        for (char ch : key) {
+            hash = (hash * 31) + ch;
+        }
+        return hash % tableSize;
+    }
+
+    // Проверка на необходимость рехеширования
+    void checkLoadFactor() {
+        if (numElements > tableSize) {
+            rehash();
+        }
+    }
+
+public:
+    HashTable(int size) : tableSize(size), numElements(0) {
+        table.resize(tableSize);
+    }
+
+    // Вставка ключа в таблицу
+    void insert(const string& key, int recordNumber, bool outputflag){
+        int index = hashFunction(key);
+        table[index].push_back({ key, recordNumber });
+        numElements++;
+        checkLoadFactor();
+        if (outputflag) {
+            cout << "Inserted key '" << key << "' at index " << index << endl;
+        }
+    }
+
+    // Удаление ключа из таблицы
+    void remove(const string& key) {
+        int index = hashFunction(key);
+        auto& chain = table[index];
+        for (auto it = chain.begin(); it != chain.end(); ++it) {
+            if (it->key == key) {
+                chain.erase(it);
+                numElements--;
+                cout << "Deleted key '" << key << "' from index " << index << endl;
+                return;
+            }
+        }
+        cout << "Key '" << key << "' not found for deletion." << endl;
+    }
+
+    // Поиск ключа в таблице
+    int find(const string& key) const {
+        int index = hashFunction(key);
+        const auto& chain = table[index];
+        for (const auto& element : chain) {
+            if (element.key == key) {
+                cout << "Found key '" << key << "' at index " << index << endl;
+                return element.recordNumber;
+            }
+        }
+        cout << "Key '" << key << "' not found." << endl;
+        return -1; // Не найдено
+    }
+
+    // Рехеширование (увеличение размера таблицы в два раза)
+    void rehash() {
+        vector<list<HashTableElement>> oldTable = table;
+        tableSize *= 2;
+        table.clear();
+        table.resize(tableSize);
+        numElements = 0;
+        cout << "Rehashing table to new size " << tableSize << endl;
+        for (const auto& chain : oldTable) {
+            for (const auto& element : chain) {
+                insert(element.key, element.recordNumber, false);
+            }
+        }
+    }
+};
+
+// Функция для добавления записи в бинарный файл и получения номера записи
+int addRecordToFile(const Patient& patient, const string& filename) {
+    ofstream file(filename, ios::binary | ios::app);
+    if (!file) {
+        cerr << "Error opening file for writing." << endl;
+        return -1;
+    }
+
+    // Записываем структуру в бинарный файл
+    file.write((char*)&patient, sizeof(Patient));
+    if (!file) {
+        cerr << "Error writing to file." << endl;
+        return -1;
+    }
+
+    // Номер записи — смещение от начала файла, деленное на размер записи
+    file.close();
+
+    ifstream inFile(filename, ios::binary | ios::ate);
+    streampos fileSize = inFile.tellg();
+    int recordNumber = (fileSize / sizeof(Patient)) - 1;
+    inFile.close();
+
+    return recordNumber;
+}
+
+// Функция для чтения записи из бинарного файла по номеру записи
+Patient readRecordFromFile(int recordNumber, const string& filename) {
+    Patient patient = {};
+    ifstream file(filename, ios::binary);
+    if (!file) {
+        cerr << "Error opening file for reading." << endl;
+        return patient;
+    }
+
+    // Переходим к нужной записи
+    file.seekg(recordNumber * sizeof(Patient), ios::beg);
+    if (!file) {
+        cerr << "Error seeking in file." << endl;
+        return patient;
+    }
+
+    // Читаем запись
+    file.read((char*)&patient, sizeof(Patient));
+    if (!file) {
+        cerr << "Error reading from file." << endl;
+    }
+
+    file.close();
+    return patient;
+}
+
+// Функция для логического удаления записи из файла
+void deleteRecordFromFile(int recordNumber, const string& filename) {
+    fstream file(filename, ios::binary | ios::in | ios::out);
+    if (!file) {
+        cerr << "Error opening file for updating." << endl;
+        return;
+    }
+
+    // Переходим к нужной записи
+    file.seekp(recordNumber * sizeof(Patient), ios::beg);
+    if (!file) {
+        cerr << "Error seeking in file." << endl;
+        return;
+    }
+
+    Patient patient = {};
+    file.read((char*)&patient, sizeof(Patient));
+
+    if (!file) {
+        cerr << "Error reading from file." << endl;
+        return;
+    }
+
+    // Помечаем запись как удаленную
+    patient.isDeleted = true;
+
+    // Перезаписываем
+    file.seekp(recordNumber * sizeof(Patient), ios::beg);
+    file.write((char*)&patient, sizeof(Patient));
+    if (!file) {
+        cerr << "Error writing to file." << endl;
+    }
+
+    file.close();
+}
+
+// Функция для добавления пациента
+void addPatient(HashTable& hashTable, const Patient& patient, const string& filename) {
+    int recordNumber = addRecordToFile(patient, filename);
+    if (recordNumber == -1) {
+        cerr << "Failed to add record to file." << endl;
+        return;
+    }
+
+    hashTable.insert(patient.cardNumber, recordNumber, true);
+}
+
+// Функция для поиска пациента по номеру карточки
+void findPatient(HashTable& hashTable, const string& key, const string& filename) {
+    int recordNumber = hashTable.find(key);
+    if (recordNumber == -1) {
+        cerr << "Key not found in hash table." << endl;
+        return;
+    }
+
+    Patient patient = readRecordFromFile(recordNumber, filename);
+
+    if (patient.isDeleted) {
+        cerr << "Record has been deleted." << endl;
+        return;
+    }
+
+    cout << "Patient Information:" << endl;
+    cout << "Card Number: " << patient.cardNumber << endl;
+    cout << "Disease Code: " << patient.diseaseCode << endl;
+    cout << "Doctor Last Name: " << patient.doctorLastName << endl;
+}
+
+// Главная функция для тестирования
+int main() {
+    string filename = "patients.bin";
+    HashTable hashTable(10);
+
+    // Генерация тестовых данных
+    Patient p1 = { "CARD001", "D001", "Ivanov", false };
+    Patient p2 = { "CARD002", "D002", "Petrov", false };
+    Patient p3 = { "CARD003", "D003", "Sidorov", false };
+    
+    addPatient(hashTable, p1, filename);
+    addPatient(hashTable, p2, filename);
+    addPatient(hashTable, p3, filename);
+
+    // Тестирование поиска
+    cout << "\nSearching for 'CARD002':" << endl;
+    findPatient(hashTable, "CARD002", filename);
+
+    return 0;
+}
